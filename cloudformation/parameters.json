@@ -1,0 +1,46 @@
+[
+  {
+    "ParameterKey": "AdminUsername",
+    "ParameterValue": "admin"
+  },
+  {
+    "ParameterKey": "ApplicationName",
+    "ParameterValue": "CloudAttendanceSystem"
+  },
+  {
+    "ParameterKey": "DBPassword",
+    "ParameterValue": "ESWARDB2026"
+  },
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "production"
+  },
+  {
+    "ParameterKey": "DjangoSecretKey",
+    "ParameterValue": "bJc_f-Hza2frqOyOYzZ2n_kXzQYmP6UCPY8VtJRHg-a-ZSyH08CvTNriQBU6chi7F6Y"
+  },
+  {
+    "ParameterKey": "EC2InstanceType",
+    "ParameterValue": "t3.micro"
+  },
+  {
+    "ParameterKey": "DBName",
+    "ParameterValue": "attendance_db"
+  },
+  {
+    "ParameterKey": "SolutionStackName",
+    "ParameterValue": "64bit Amazon Linux 2023 v4.13.9 running Python 3.12"
+  },
+  {
+    "ParameterKey": "DBUsername",
+    "ParameterValue": "attendanceadmin"
+  },
+  {
+    "ParameterKey": "AdminEmail",
+    "ParameterValue": "ambatieswarreddy25@gmail.com"
+  },
+  {
+    "ParameterKey": "AdminPassword",
+    "ParameterValue": "Eswar@2026"
+  }
+]

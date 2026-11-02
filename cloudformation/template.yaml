@@ -1,0 +1,560 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  Cloud Attendance System - Django 5 on Elastic Beanstalk Python 3.12
+  with Amazon RDS for MySQL Single-AZ.
+  Free-tier-oriented demo configuration.
+
+Parameters:
+
+  ApplicationName:
+    Type: String
+    Default: CloudAttendanceSystem
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9-]*'
+
+  EnvironmentName:
+    Type: String
+    Default: production
+
+  SolutionStackName:
+    Type: String
+    Default: '64bit Amazon Linux 2023 v4.13.9 running Python 3.12'
+    Description: Verify this platform exists in ap-south-1 before deployment.
+
+  EC2InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+
+  DBName:
+    Type: String
+    Default: attendance_db
+
+  DBUsername:
+    Type: String
+    Default: attendanceadmin
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+
+  DjangoSecretKey:
+    Type: String
+    NoEcho: true
+    MinLength: 20
+
+  AdminUsername:
+    Type: String
+    Default: admin
+
+  AdminEmail:
+    Type: String
+    Default: admin@example.com
+
+  AdminPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+
+
+Resources:
+
+  # ============================================================
+  # VPC
+  # ============================================================
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-VPC'
+
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-IGW'
+
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+
+  # ============================================================
+  # PUBLIC SUBNETS - ELASTIC BEANSTALK
+  # ============================================================
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-PublicSubnet1'
+
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-PublicSubnet2'
+
+
+  # ============================================================
+  # PRIVATE SUBNETS - RDS
+  # ============================================================
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-PrivateSubnet1'
+
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.12.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-PrivateSubnet2'
+
+
+  # ============================================================
+  # PUBLIC ROUTING
+  # ============================================================
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+
+  PublicSubnet1RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+
+  PublicSubnet2RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+
+  # ============================================================
+  # SECURITY GROUPS
+  # ============================================================
+
+  EBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP and HTTPS access to Elastic Beanstalk instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-EB-SG'
+
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MySQL access from Elastic Beanstalk
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EBSecurityGroup
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-RDS-SG'
+
+
+  # ============================================================
+  # RDS SUBNET GROUP
+  # ============================================================
+
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for MySQL
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+
+  # ============================================================
+  # RDS MYSQL
+  # ============================================================
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+
+    Properties:
+      DBInstanceIdentifier: !Sub '${ApplicationName}-mysql'
+
+      DBName: !Ref DBName
+
+      Engine: mysql
+
+      DBInstanceClass: db.t3.micro
+
+      AllocatedStorage: 20
+
+      MaxAllocatedStorage: 20
+
+      StorageType: gp3
+
+      StorageEncrypted: true
+
+      MasterUsername: !Ref DBUsername
+
+      MasterUserPassword: !Ref DBPassword
+
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+
+      PubliclyAccessible: false
+
+      MultiAZ: false
+
+      BackupRetentionPeriod: 0
+
+      DeletionProtection: false
+
+
+  # ============================================================
+  # ELASTIC BEANSTALK EC2 INSTANCE ROLE
+  # ============================================================
+
+  EBInstanceRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+
+        Statement:
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWorkerTier
+
+
+  # ============================================================
+  # INSTANCE PROFILE
+  # ============================================================
+
+  EBInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+
+    Properties:
+      Roles:
+        - !Ref EBInstanceRole
+
+
+  # ============================================================
+  # ELASTIC BEANSTALK SERVICE ROLE
+  #
+  # IMPORTANT:
+  # Managed Updates policy removed.
+  #
+  # Managed platform updates are disabled below, so this
+  # configuration only uses Enhanced Health permissions.
+  # ============================================================
+
+  EBServiceRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+
+        Statement:
+
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - elasticbeanstalk.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+            Condition:
+              StringEquals:
+                sts:ExternalId: elasticbeanstalk
+
+      ManagedPolicyArns:
+
+        - arn:aws:iam::aws:policy/service-role/AWSElasticBeanstalkEnhancedHealth
+
+
+  # ============================================================
+  # ELASTIC BEANSTALK APPLICATION
+  # ============================================================
+
+  EBApplication:
+    Type: AWS::ElasticBeanstalk::Application
+
+    Properties:
+      ApplicationName: !Ref ApplicationName
+
+
+  # ============================================================
+  # ELASTIC BEANSTALK ENVIRONMENT
+  # ============================================================
+
+  EBEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+
+    DependsOn:
+      - RDSInstance
+      - EBServiceRole
+      - EBInstanceProfile
+
+    Properties:
+
+      ApplicationName: !Ref EBApplication
+
+      CNAMEPrefix: !Sub '${AWS::StackName}'
+
+      SolutionStackName: !Ref SolutionStackName
+
+      OptionSettings:
+
+        # --------------------------------------------------------
+        # EC2 INSTANCE
+        # --------------------------------------------------------
+
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: !Ref EBInstanceProfile
+
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: InstanceType
+          Value: !Ref EC2InstanceType
+
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: SecurityGroups
+          Value: !Ref EBSecurityGroup
+
+
+        # --------------------------------------------------------
+        # VPC
+        # --------------------------------------------------------
+
+        - Namespace: aws:ec2:vpc
+          OptionName: VPCId
+          Value: !Ref VPC
+
+        - Namespace: aws:ec2:vpc
+          OptionName: Subnets
+          Value: !Join
+            - ','
+            - - !Ref PublicSubnet1
+              - !Ref PublicSubnet2
+
+        - Namespace: aws:ec2:vpc
+          OptionName: AssociatePublicIpAddress
+          Value: 'true'
+
+
+        # --------------------------------------------------------
+        # SINGLE INSTANCE
+        # --------------------------------------------------------
+
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: EnvironmentType
+          Value: SingleInstance
+
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: ServiceRole
+          Value: !Ref EBServiceRole
+
+
+        # --------------------------------------------------------
+        # DJANGO
+        # --------------------------------------------------------
+
+        - Namespace: aws:elasticbeanstalk:container:python
+          OptionName: WSGIPath
+          Value: Attendance_System.wsgi:application
+
+
+        # --------------------------------------------------------
+        # STATIC FILES
+        # --------------------------------------------------------
+
+        - Namespace: aws:elasticbeanstalk:environment:proxy:staticfiles
+          OptionName: /static
+          Value: staticfiles
+
+
+        # --------------------------------------------------------
+        # HEALTH
+        # --------------------------------------------------------
+
+        - Namespace: aws:elasticbeanstalk:healthreporting:system
+          OptionName: SystemType
+          Value: basic
+
+
+        # --------------------------------------------------------
+        # MANAGED PLATFORM UPDATES
+        #
+        # Disabled to avoid requiring the managed-updates
+        # customer role policy.
+        # --------------------------------------------------------
+
+        - Namespace: aws:elasticbeanstalk:managedactions
+          OptionName: ManagedActionsEnabled
+          Value: 'false'
+
+
+        # --------------------------------------------------------
+        # DATABASE ENVIRONMENT VARIABLES
+        # --------------------------------------------------------
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: RDS_HOSTNAME
+          Value: !GetAtt RDSInstance.Endpoint.Address
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: RDS_PORT
+          Value: !GetAtt RDSInstance.Endpoint.Port
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: RDS_DB_NAME
+          Value: !Ref DBName
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: RDS_USERNAME
+          Value: !Ref DBUsername
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: RDS_PASSWORD
+          Value: !Ref DBPassword
+
+
+        # --------------------------------------------------------
+        # DJANGO CONFIGURATION
+        # --------------------------------------------------------
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: SECRET_KEY
+          Value: !Ref DjangoSecretKey
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: DEBUG
+          Value: 'False'
+
+
+        # --------------------------------------------------------
+        # DJANGO ADMIN
+        # --------------------------------------------------------
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: DJANGO_SUPERUSER_USERNAME
+          Value: !Ref AdminUsername
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: DJANGO_SUPERUSER_EMAIL
+          Value: !Ref AdminEmail
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: DJANGO_SUPERUSER_PASSWORD
+          Value: !Ref AdminPassword
+
+
+# ==============================================================
+# OUTPUTS
+# ==============================================================
+
+Outputs:
+
+  ApplicationURL:
+    Description: Elastic Beanstalk URL
+    Value: !Sub 'http://${AWS::StackName}.elasticbeanstalk.com'
+
+
+  EBEnvironmentName:
+    Description: Elastic Beanstalk environment
+    Value: !Ref EBEnvironment
+
+
+  RDSHostname:
+    Description: Private MySQL endpoint
+    Value: !GetAtt RDSInstance.Endpoint.Address
+
+
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
